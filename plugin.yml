@@ -1,6 +1,6 @@
 name: 2vs2Abosh
 main: EDLB\EDLB
-api: 3.0.0
+api: 5.0.0
 version: abosh-400$
 author: abosh
 commands:
