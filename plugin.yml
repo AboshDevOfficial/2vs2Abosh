@@ -1,0 +1,23 @@
+name: 2vs2Abosh
+main: EDLB\EDLB
+api: 3.0.0
+version: abosh-400$
+author: abosh
+commands:
+    edlb:
+        usage: /edlb <make>
+        description: Create 2vs2Abosh game
+    edlbstart:
+        usage: /edlbstart
+        description: Start 2vs2Abosh game
+        permission: edlb.start
+    edlbnpc:
+        usage: /edlbnpc
+        description: Spawn NPC to 2vs2Abosh
+        permission: edlb.npc
+    2vs2:
+        usage: /2vs2 join
+        description: Join random 2vs2Abosh arena
+    finder:
+        usage: /finder
+        description: Finds the runner for manabosh

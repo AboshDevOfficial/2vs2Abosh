@@ -1,0 +1,1357 @@
+<?php
+
+namespace EDLB;
+
+use pocketmine\plugin\PluginBase;
+use pocketmine\event\Listener;
+use pocketmine\utils\TextFormat as TE;
+use pocketmine\utils\Config;
+use pocketmine\command\CommandSender;
+use pocketmine\command\Command;
+use pocketmine\scheduler\Task;
+use pocketmine\event\player\PlayerInteractEvent;
+use pocketmine\event\player\PlayerLoginEvent;
+use pocketmine\event\player\PlayerQuitEvent;
+use pocketmine\level\Position;
+use pocketmine\Player;
+use pocketmine\entity\{Entity, Effect, EffectInstance};
+use pocketmine\tile\Sign;
+use pocketmine\level\Level;
+use pocketmine\event\block\BlockBreakEvent;
+use pocketmine\event\block\BlockPlaceEvent;
+use pocketmine\event\player\PlayerDeathEvent;
+use pocketmine\event\entity\EntityDamageEvent;
+use pocketmine\event\entity\EntityDamageByEntityEvent;
+use EDLB\{ResetMap, Entity\EntityManager, Entity\types\EntityHuman};
+use EDLB\API\ScoreAPI;
+use pocketmine\level\sound\PopSound;
+use pocketmine\level\sound\AnvilUseSound;
+use pocketmine\level\sound\GhastShootSound;
+use pocketmine\block\Air;
+use pocketmine\item\Item;
+use pocketmine\event\entity\EntityLevelChangeEvent;
+
+class EDLB extends PluginBase implements Listener {
+
+    public $prefix = TE::GRAY . "[" . TE::YELLOW. TE::BOLD . "Man" . TE::YELLOW . "Hunt" . TE::RESET . TE::GRAY . "]";
+	public $mode = 0;
+	public $arenas = array();
+	public $currentLevel = "";
+        public $op = array();
+        public $score;
+	
+	public function onEnable(){
+		  $this->getLogger()->info(TE::RED . "EDLB by FoxyDroiid");
+              
+                $this->getServer()->getPluginManager()->registerEvents($this ,$this);
+		@mkdir($this->getDataFolder());
+		$config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+		if($config->get("arenas")!=null)
+		{
+			$this->arenas = $config->get("arenas");
+		}
+		foreach($this->arenas as $lev)
+		{
+			$this->getServer()->loadLevel($lev);
+		}
+		$config->save();
+                $slots = new Config($this->getDataFolder() . "/slots.yml", Config::YAML);
+                $slots->save();
+                $this->score = new ScoreAPI($this);
+        $this->getScheduler()->scheduleRepeatingTask(new GameSender($this), 20);
+        $this->getScheduler()->scheduleRepeatingTask(new EntityUpdate($this), 20);
+		$this->getScheduler()->scheduleRepeatingTask(new RefreshSigns($this), 20);
+        Entity::registerEntity(EntityHuman::class, true);
+	}
+        
+        public function onDisable() {
+            $config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+            $slots = new Config($this->getDataFolder() . "/slots.yml", Config::YAML);
+            if($config->get("arenas")!=null)
+            {
+                    $this->arenas = $config->get("arenas");
+            }
+            foreach($this->arenas as $arena)
+            {
+                $slots->set("slot1".$arena, 0);
+                $slots->set("slot2".$arena, 0);
+                $slots->set("slot3".$arena, 0);
+                $slots->set("slot4".$arena, 0);
+                $slots->set("slot5".$arena, 0);
+                $slots->set("slot6".$arena, 0);
+                $slots->set("slot7".$arena, 0);
+                $slots->set("slot8".$arena, 0);
+                $slots->set("slot9".$arena, 0);
+                $slots->set("slot10".$arena, 0);
+                $slots->set("slot11".$arena, 0);
+                $slots->set("slot12".$arena, 0);
+                $slots->set("slot13".$arena, 0);
+                $slots->set("slot14".$arena, 0);
+                $slots->set("slot15".$arena, 0);
+                $slots->set("slot16".$arena, 0);
+                $slots->set("slot17".$arena, 0);
+                $slots->set("slot18".$arena, 0);
+                $config->set($arena . "inicio", 0);
+                $slots->save();
+                $this->reload($arena);
+            }
+        }
+        
+        public function reload($lev)
+        {
+                if ($this->getServer()->isLevelLoaded($lev))
+                {
+                        $this->getServer()->unloadLevel($this->getServer()->getLevelByName($lev));
+                }
+                $zip = new \ZipArchive;
+                $zip->open($this->getDataFolder() . 'arenas/' . $lev . '.zip');
+                $zip->extractTo($this->getServer()->getDataPath() . 'worlds');
+                $zip->close();
+                unset($zip);
+                return true;
+        }
+        
+        public function getPlayers(string $arena) {
+        	$players = [];
+        	foreach ($this->getServer()->getLevelByName($arena)->getPlayers() as $player) {
+        		if ($player->getGamemode() == 0 || $player->getGamemode() == 2) {
+        			array_push($players, $player->getName());
+        		}
+        	}
+        	return $players;
+        }
+        
+        public function getSpecters(string $arena) {
+        	$players = [];
+        	foreach ($this->getServer()->getLevelByName($arena)->getPlayers() as $player) {
+        		if ($player->getGamemode() == 3) {
+        			array_push($players, $player->getName());
+        		}
+        	}
+        	return $players;
+        }
+
+        public function getOpenArenas() {
+            $config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+            $arenas = [];
+            if (count($this->arenas) > 0) {
+                foreach ($this->arenas as $arena) {
+                    if ($config->get($arena . 'StartTime') >= 1 && $config->get($arena . 'StartTime') <= 30) {
+                        $arenas[] = $arena;
+                    } else {
+                        $arenas = null;
+                    }
+                }
+            } else {
+                $arenas = null;
+            }
+            if ($arenas != null) {
+                shuffle($arenas);
+            }
+            return $arenas;
+        }
+
+        public function getQueueArenas() {
+            $config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+            $arenas = [];
+            if (count($this->arenas) > 0) {
+                foreach ($this->arenas as $arena) {
+                    if ($config->get($arena . 'StartTime') >= 1 && $config->get($arena . 'StartTime') <= 30 && $this->getPlayers($arena) >= 1) {
+                        $arenas[] = $arena;
+                    } else {
+                        $arenas = null;
+                    }
+                }
+            } else {
+                $arenas = null;
+            }
+            if ($arenas != null) {
+                shuffle($arenas);
+            }
+            return $arenas;
+        }
+
+        public function getArenas() {
+            $arena = $this->getOpenArenas();
+            $arena_queue = $this->getQueueArenas();
+            if ($arena != null) {
+                return $this->getOpenArenas()[0];
+            } else if ($arena_queue != null) {
+                return $this->getQueueArenas()[0];
+            } else {
+                return null;
+            }
+        }
+
+        public function getGameParty(Player $player) {
+            $config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+            $slots = new Config($this->getDataFolder() . "/slots.yml", Config::YAML);
+            $arena = $this->getArenas();
+            if ($arena != null) {
+                $level = $this->getServer()->getLevelByName($arena);
+                if (count($this->getPlayers($arena)) < 18) {
+                    $namemap = str_replace("§f", "", $arena);
+                    if(strpos($player->getNameTag(), "§aRunner>") !== false) {
+                        $team = TE::GREEN."Runner";
+                        if($slots->get("slot1".$namemap)==null) {
+                            $thespawn = $config->get($namemap . "Spawn2");
+                            $slots->set("slot1".$namemap, $player->getName());
+			} elseif($slots->get("slot4".$namemap)==null) {
+                            $thespawn = $config->get($namemap . "Spawn2");
+                            $slots->set("slot4".$namemap, $player->getName());
+			} elseif($slots->get("slot6".$namemap)==null) {
+                            $thespawn = $config->get($namemap . "Spawn2");
+                            $slots->set("slot6".$namemap, $player->getName());
+			} elseif($slots->get("slot8".$namemap)==null) {
+                            $thespawn = $config->get($namemap . "Spawn2");
+                            $slots->set("slot8".$namemap, $player->getName());
+			} elseif($slots->get("slot10".$namemap)==null) {
+                            $thespawn = $config->get($namemap . "Spawn2");
+                            $slots->set("slot10".$namemap, $player->getName());
+			} elseif($slots->get("slot12".$namemap)==null) {
+                            $thespawn = $config->get($namemap . "Spawn2");
+                            $slots->set("slot12".$namemap, $player->getName());
+                        } elseif($slots->get("slot18".$namemap)==null) {
+                            $thespawn = $config->get($namemap . "Spawn2");
+                            $slots->set("slot18".$namemap, $player->getName());
+                        } else {
+                            $player->sendMessage($this->prefix.TE::RED."Runners teams are now full ");
+                            goto sinequipo;
+                        }
+                    } elseif(strpos($player->getNameTag(), "§cHunter>") !== false) {
+                        $team = TE::RED."Hunter";
+                        $thespawn = $config->get($namemap . "Spawn1");
+                    } elseif($slots->get("slot1".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn2");
+                        $slots->set("slot1".$namemap, $player->getName());
+                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                        $team = TE::GREEN."Runner";
+                    } elseif($slots->get("slot2".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot2".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot3".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot3".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot4".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn2");
+                        $slots->set("slot4".$namemap, $player->getName());
+                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                        $team = TE::GREEN."Runner";
+                    } elseif($slots->get("slot5".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot5".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot6".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn2");
+                        $slots->set("slot6".$namemap, $player->getName());
+                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                        $team = TE::GREEN."Runner";
+                    } elseif($slots->get("slot7".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot7".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot8".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn2");
+                        $slots->set("slot8".$namemap, $player->getName());
+                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                        $team = TE::GREEN."Runner";
+                    } elseif($slots->get("slot9".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot9".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot10".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn2");
+                        $slots->set("slot10".$namemap, $player->getName());
+                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                        $team = TE::GREEN."Runner";
+                    } elseif($slots->get("slot11".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot11".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot12".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn2");
+                        $slots->set("slot12".$namemap, $player->getName());
+                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                        $team = TE::GREEN."Runner";
+                    } elseif($slots->get("slot13".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot13".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot14".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot14".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot15".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot15".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot16".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot16".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot17".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn1");
+                        $slots->set("slot17".$namemap, $player->getName());
+                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                        $team = TE::RED."Hunter";
+                    } elseif($slots->get("slot18".$namemap)==null) {
+                        $thespawn = $config->get($namemap . "Spawn2");
+                        $slots->set("slot18".$namemap, $player->getName());
+                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                        $team = TE::GREEN."Runner";
+                    } else {
+                        nohay:
+                        $player->sendMessage($this->prefix.TE::RED."Server is full.");
+                        goto sinequipo;
+                    }
+                    $slots->save();
+                    $player->setGamemode(2);
+					$player->getInventory()->clearAll();
+					$player->getArmorInventory()->clearAll();
+                    $player->removeAllEffects();
+                    $player->setMaxHealth(20);
+                    $player->setHealth(20);
+                    $player->setFood(20);
+                    $spawn = new Position($thespawn[0]+0.5,$thespawn[1],$thespawn[2]+0.5, $level);
+					$level->loadChunk($spawn->getFloorX(), $spawn->getFloorZ());
+					$player->teleport($spawn,0,0);
+                    if(strpos($player->getNameTag(), "§cHunter>") !== false) {
+                        $player->getArmorInventory()->setChestplate(Item::get(Item::LEATHER_CHESTPLATE));
+                        $player->getInventory()->setItem(2, Item::get(Item::COOKED_BEEF, 0, 5));
+                        $player->getInventory()->setItem(3, Item::get(Item::COMPASS, 0, 1));               
+			$player->addEffect(new EffectInstance(Effect::getEffect(Effect::NIGHT_VISION), (99999999*20), (3), (false)));
+                    } else {
+                        $player->getInventory()->setItem(0, Item::get(Item::COOKED_BEEF, 0, 5));
+                        $player->addEffect(new EffectInstance(Effect::getEffect(Effect::NIGHT_VISION), (99999999*20), (3), (false)));
+                    }
+                    $player->addTitle("§eYou joined team\n §r".$team);
+                    foreach($level->getPlayers() as $playersinarena) {
+                        $playersinarena->sendMessage($player->getNameTag() .TE::YELLOW. " has joined the match");
+                    }
+                    sinequipo:
+                } else {
+                    $player->sendMessage(TE::RED . 'The server is full.');
+                }
+            } else {
+                $player->sendMessage(TE::RED . 'No game to be found.');
+            }
+        }
+
+        public function onHit(EntityDamageByEntityEvent $event) {
+            if ($event->getEntity() instanceof EntityHuman) {
+                $player = $event->getDamager();
+                if ($player instanceof Player) {
+                    $event->setCancelled(true);
+                    $this->getGameParty($player);
+                }
+            }
+        }
+        
+        public function onDeath(EntityDamageEvent $event) {
+        	$player = $event->getEntity();
+        	if ($player instanceof Player) {
+        		$arena = $player->getLevel()->getFolderName();
+        		$api = $this->score;
+        		if (in_array($arena, $this->arenas)) {
+        			switch ($event->getCause()) {
+        				case EntityDamageEvent::CAUSE_ENTITY_ATTACK:
+        					if ($event instanceof EntityDamageByEntityEvent) {
+        						$damager = $event->getDamager();
+        						if ($damager instanceof Player) {
+        							if ($event->getFinalDamage() >= $player->getHealth()) {
+        								$event->setCancelled();
+        								foreach ($player->getLevel()->getPlayers() as $players) {
+        									$players->sendMessage($player->getNameTag() . TE::YELLOW . " was killed by " . $damager->getNameTag());
+        								}
+        								$player->setGamemode(3);
+							   		    $player->setHealth(20);
+                           			    $player->setFood(20);
+        								$player->setNameTag($player->getName());
+        								$api->remove($player);
+        								$player->removeAllEffects();
+        								$player->getInventory()->clearAll();
+									$player->addTitle("§l§cYOU DIED!");
+        								$player->getArmorInventory()->clearAll();
+        							}
+        						}
+        					}
+        				break;
+       				    default:
+       					    if ($event->getFinalDamage() >= $player->getHealth()) {
+       						    foreach ($player->getLevel()->getPlayers() as $players) {
+        					    }
+       						    $event->setCancelled();
+       						    $player->setGamemode(3);
+							    $player->setHealth(20);
+                           	    $player->setFood(20);
+                           	    $player->setNameTag($player->getName());
+        	   				    $api->remove($player);
+        			   		    $player->removeAllEffects();
+        	   				    $player->getInventory()->clearAll();
+						    $player->addTitle("§l§cYOU DIED!");
+        	   				    $player->getArmorInventory()->clearAll();
+       					    }
+       				    break;
+        			}
+        		}
+        	}
+        }
+        
+        public function chang($pl) {
+            $level = $pl->getLevel()->getFolderName();
+            if(in_array($level,$this->arenas))
+            {
+                $slots = new Config($this->getDataFolder() . "/slots.yml", Config::YAML);
+                for ($i = 1; $i <= 18; $i++) {
+                    if($slots->get("slot".$i.$level)==$pl->getName())
+                    {
+                        $slots->set("slot".$i.$level, 0);
+                    }
+                }
+                $slots->save();
+            }
+        }
+	
+        public function enCambioMundo(EntityLevelChangeEvent $event)
+        {
+            $pl = $event->getEntity();
+            if($pl instanceof Player)
+            {
+                $lev = $event->getOrigin();
+                if($lev instanceof Level && in_array($lev->getFolderName(),$this->arenas))
+		{
+                $level = $lev->getFolderName();
+                $pl->removeAllEffects();
+                $pl->getInventory()->clearAll();
+                $pl->getArmorInventory()->clearAll();
+                $pl->setNameTag($pl->getName());
+                $api = $this->score;
+                    $api->remove($pl);
+                $slots = new Config($this->getDataFolder() . "/slots.yml", Config::YAML);
+                for ($i = 1; $i <= 18; $i++) {
+                    if($slots->get("slot".$i.$level)==$pl->getName())
+                    {
+                        $slots->set("slot".$i.$level, 0);
+                    }
+                }
+                $slots->save();
+                }
+            }
+        }
+
+        public function onLog(PlayerLoginEvent $event)
+	{
+            $player = $event->getPlayer();
+            if(in_array($player->getLevel()->getFolderName(),$this->arenas))
+            {
+            $player->getInventory()->clearAll();
+            $player->getArmorInventory()->clearAll();
+            $spawn = $this->getServer()->getDefaultLevel()->getSafeSpawn();
+            $player->teleport($spawn,0,0);
+            }
+	}
+        
+        public function onQuit(PlayerQuitEvent $event)
+        {
+            $pl = $event->getPlayer();
+            $level = $pl->getLevel()->getFolderName();
+            if(in_array($level,$this->arenas))
+            {
+            $pl->getInventory()->clearAll();
+            $pl->getArmorInventory()->clearAll();
+            $pl->setNameTag($pl->getName());
+            $this->chang($pl);
+            $api = $this->score;
+                    $api->remove($pl);
+            }
+        }
+	
+	public function onBlockBr(BlockBreakEvent $event)
+	{
+            $player = $event->getPlayer();
+            $level = $player->getLevel()->getFolderName();
+            if(in_array($level,$this->arenas))
+            {
+                $event->setCancelled(false);
+            }
+	}
+        
+    public function onBlockPl(BlockPlaceEvent $event) {
+        $player = $event->getPlayer();
+        $level = $player->getLevel()->getFolderName();
+        if(in_array($level,$this->arenas)) {
+            $event->setCancelled(false);
+        }
+	}
+        
+        public function onDam(EntityDamageEvent $event) {
+            $player = $event->getEntity();
+            $level = $player->getLevel()->getFolderName();
+            if(in_array($level,$this->arenas))
+            {
+            if ($event instanceof EntityDamageByEntityEvent) {
+                if ($player instanceof Player && $event->getDamager() instanceof Player) {
+                $config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+                if($config->get($level . "PlayTime") != null)
+                {
+                        if($config->get($level . "PlayTime") > 500)
+                        {
+                                $event->setCancelled();
+                        }
+                        elseif ((strpos($player->getNameTag(), "§cHunter>)") !== false) && (strpos($event->getDamager()->getNameTag(), "§cHunter>") !== false)) {
+                        $event->setCancelled();
+                        }
+                        elseif ((strpos($player->getNameTag(), "§aRunner>") !== false) && (strpos($event->getDamager()->getNameTag(), "§aRunner>") !== false)) {
+                        $event->setCancelled();
+                        }
+                        else
+                        {
+                        $event->setKnockBack(0.2);
+                        }
+                }
+                }
+                }
+            }
+        }
+		
+	
+	public function onCommand(CommandSender $player, Command $command, string $label, array $args) :bool{
+        switch($command->getName()){
+			case "edlb":
+                            if($player->isOp())
+                            {
+                                if(!empty($args[0]))
+                                {
+                                    if($args[0]=="make")
+                                    {
+                                        if(!empty($args[1]))
+                                        {
+                                            if(file_exists($this->getServer()->getDataPath() . "/worlds/" . $args[1]))
+                                            {
+                                                $this->getServer()->loadLevel($args[1]);
+                                                $this->getServer()->getLevelByName($args[1])->loadChunk($this->getServer()->getLevelByName($args[1])->getSafeSpawn()->getFloorX(), $this->getServer()->getLevelByName($args[1])->getSafeSpawn()->getFloorZ());
+                                                array_push($this->arenas,$args[1]);
+                                                $this->currentLevel = $args[1];
+                                                $this->mode = 1;
+                                                $player->sendMessage($this->prefix . "Toca Spawn Corredores!");
+                                                $player->setGamemode(1);
+                                                array_push($this->op, $player->getName());
+                                                $player->teleport($this->getServer()->getLevelByName($args[1])->getSafeSpawn(),0,0);
+                                                $name = $args[1];
+                                                $this->zipper($player, $name);
+                                            }
+                                            else
+                                            {
+                                                    $player->sendMessage($this->prefix . "ERROR missing world.");
+                                            }
+                                        }
+                                        else
+                                        {
+                                                $player->sendMessage($this->prefix . "ERROR missing parameters.");
+                                        }
+                                    }
+                                    else
+                                    {
+                                            $player->sendMessage($this->prefix . "Invalid Command.");
+                                    }
+                                }
+                                else
+                                {
+                                 $player->sendMessage($this->prefix . "EscapaDeLaBestia Commands!");
+                                 $player->sendMessage($this->prefix . "/edlb make [world]: Create a EdlB game!");
+                                }
+                            }
+			return true;
+                        
+                        case "edlbstart":
+                            if($player->isOp())
+				{
+                                if(!empty($args[0]))
+					{
+                                        $config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+                                        if($config->get($args[0] . "StartTime") != null)
+                                        {
+                                        $config->set($args[0] . "StartTime", 10);
+                                        $config->save();
+                                        $player->addTitle(TE::GOLD."Starting Match In 10...". TE::RESET);
+                                        }
+                                        }
+                                        else
+                                        {
+                                            $level = $player->getLevel()->getFolderName();
+                                            $config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+                                            if($config->get($level . "StartTime") != null)
+                                            {
+                                            $config->set($level . "StartTime", 10);
+                                            $config->save();
+                                            $player->addTitle(TE::GOLD."Starting Match In 10...". TE::RESET);
+                                            }
+                                        }
+                                }
+                                return true;
+                                case 'edlbnpc':
+                                    if ($player->isOp()) {
+                                        $npc = new EntityManager($this);
+                                        $npc->setEntity($player);
+                                    }
+                                return true;
+	}
+        }
+	
+	public function onInteract(PlayerInteractEvent $event)
+	{
+		$player = $event->getPlayer();
+		$block = $event->getBlock();
+		$tile = $player->getLevel()->getTile($block);
+		
+		if($tile instanceof Sign) 
+		{
+			if(($this->mode==26)&&(in_array($player->getName(), $this->op)))
+			{
+				$tile->setText(TE::AQUA . "[JOIN]".TE::GREEN  . "0 / 18","§f" . $this->currentLevel,$this->prefix);
+				$this->refreshArenas();
+				$this->currentLevel = "";
+				$this->mode = 0;
+				$player->sendMessage($this->prefix . "Arena Registered!");
+                                array_shift($this->op);
+			}
+			else
+			{
+				$text = $tile->getText();
+				if($text[3] == $this->prefix)
+				{
+                                        if($text[0]==TE::GOLD . "[FULL]")
+                                        {
+                                            $config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+                                            $namemap = str_replace("§f", "", $text[2]);
+                                            $level = $this->getServer()->getLevelByName($namemap);
+                                            if(strpos($player->getNameTag(), "§cHunter>") !== false)
+                                            {
+                                                $team = TE::RED."Hunter";
+                                                $thespawn = $config->get($namemap . "Spawn1");
+                                            }
+                                            elseif(strpos($player->getNameTag(), "§aRunner>") !== false)
+                                            {
+                                                $team = TE::GREEN."Runner";
+                                                $thespawn = $config->get($namemap . "Spawn2");
+                                            }
+                                            else
+                                            {
+                                                $player->sendMessage($this->prefix.TE::RED."Server full.");
+                                                goto sinequipo;
+                                            }
+                                            $player->setGamemode(2);
+                                            $player->getInventory()->clearAll();
+                                            $player->getArmorInventory()->clearAll();
+                                                $player->removeAllEffects();
+                                                $player->setMaxHealth(20);
+                                                $player->setHealth(20);
+                                                $player->setFood(20);
+                                                $spawn = new Position($thespawn[0]+0.5,$thespawn[1],$thespawn[2]+0.5,$level);
+						$level->loadChunk($spawn->getFloorX(), $spawn->getFloorZ());
+						$player->teleport($spawn,0,0);
+                                                if(strpos($player->getNameTag(), "§cHunter>") !== false)
+                                                {
+                                                    $player->getArmorInventory()->setChestplate(Item::get(Item::LEATHER_CHESTPLATE));
+                                                    $player->getInventory()->setItem(2, Item::get(Item::COMPASS, 0, 5));
+                                                    $player->getInventory()->setItem(3, Item::get(Item::COOKED_BEEF, 0, 5));
+						    $player->addEffect(new EffectInstance(Effect::getEffect(Effect::NIGHT_VISION), (99999999*20), (3), (false)));
+                                                }
+                                                else
+                                                {
+                                                    $player->getInventory()->setItem(0, Item::get(Item::COOKED_BEEF, 0, 5));
+                                                    $player->addEffect(new EffectInstance(Effect::getEffect(Effect::NIGHT_VISION), (99999999*20), (3), (false)));
+                                                }
+                                                $player->addTitle("§You Joined Team\n ".$team);
+                                                foreach($level->getPlayers() as $playersinarena)
+                                                {
+                                                $playersinarena->sendMessage($player->getNameTag() . " §ehas joined the match");
+                                                }
+                                        }
+					elseif($text[0]==TE::AQUA . "[JOIN]")
+					{
+						$config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+                                                $slots = new Config($this->getDataFolder() . "/slots.yml", Config::YAML);
+                                                $namemap = str_replace("§f", "", $text[2]);
+						$level = $this->getServer()->getLevelByName($namemap);
+                                                if(strpos($player->getNameTag(), "§aRunner>") !== false)
+                                                {
+                                                    $team = TE::GREEN."Runner";
+                                                    if($slots->get("slot1".$namemap)==null)
+                                                    {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot1".$namemap, $player->getName());
+                                                    }
+                                                    elseif($slots->get("slot4".$namemap)==null)
+                                                    {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot4".$namemap, $player->getName());
+                                                    }
+						    elseif($slots->get("slot6".$namemap)==null)
+                                                    {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot6".$namemap, $player->getName());
+                                                    }
+						    elseif($slots->get("slot8".$namemap)==null)
+                                                    {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot8".$namemap, $player->getName());
+                                                    }
+						    elseif($slots->get("slot10".$namemap)==null)
+                                                    {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot10".$namemap, $player->getName());
+                                                    }
+						    elseif($slots->get("slot12".$namemap)==null)
+                                                    {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot12".$namemap, $player->getName());
+                                                    }
+                                                    elseif($slots->get("slot18".$namemap)==null)
+                                                    {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot18".$namemap, $player->getName());
+                                                    }
+                                                    else
+                                                    {
+                                                        $player->sendMessage($this->prefix.TE::RED."Runners teams are full");
+                                                        goto sinequipo;
+                                                    }
+                                                }
+                                                elseif(strpos($player->getNameTag(), "§cHunter>") !== false)
+                                                {
+                                                    $team = TE::RED."Hunter";
+                                                    $thespawn = $config->get($namemap . "Spawn1");
+                                                }
+                                                elseif($slots->get("slot1".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot1".$namemap, $player->getName());
+                                                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                                                        $team = TE::GREEN."Runner";
+                                                }
+                                                elseif($slots->get("slot2".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot2".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot3".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot3".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot4".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot4".$namemap, $player->getName());
+                                                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                                                        $team = TE::GREEN."Runner";
+                                                }
+                                                elseif($slots->get("slot5".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot5".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot6".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot6".$namemap, $player->getName());
+                                                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                                                        $team = TE::GREEN."Runner";
+                                                }
+                                                elseif($slots->get("slot7".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot7".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot8".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot8".$namemap, $player->getName());
+                                                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                                                        $team = TE::GREEN."Runner";
+                                                }
+                                                elseif($slots->get("slot9".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot9".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot10".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot10".$namemap, $player->getName());
+                                                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                                                        $team = TE::GREEN."Runner";
+                                                }
+                                                elseif($slots->get("slot11".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot11".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot12".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot12".$namemap, $player->getName());
+                                                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                                                        $team = TE::AQUA."Runner";
+                                                }
+                                                elseif($slots->get("slot13".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot13".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot14".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot14".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot15".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot15".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot16".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot16".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot17".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn1");
+                                                        $slots->set("slot17".$namemap, $player->getName());
+                                                        $player->setNameTag("§cHunter>".TE::GOLD.$player->getName());
+                                                        $team = TE::RED."Hunter";
+                                                }
+                                                elseif($slots->get("slot18".$namemap)==null)
+                                                {
+                                                        $thespawn = $config->get($namemap . "Spawn2");
+                                                        $slots->set("slot18".$namemap, $player->getName());
+                                                        $player->setNameTag("§aRunner>".TE::AQUA.$player->getName());
+                                                        $team = TE::GREEN."Runner";
+						}
+                                                else
+                                                {
+                                                    nohay:
+                                                    $player->sendMessage($this->prefix.TE::RED."The server is full.");
+                                                    goto sinequipo;
+                                                }
+                                                $slots->save();
+                                                $player->setGamemode(2);
+						$player->getInventory()->clearAll();
+						$player->getArmorInventory()->clearAll();
+                                                $player->removeAllEffects();
+                                                $player->setMaxHealth(20);
+                                                $player->setHealth(20);
+                                                $player->setFood(20);
+                                                $spawn = new Position($thespawn[0]+0.5,$thespawn[1],$thespawn[2]+0.5,$level);
+						$level->loadChunk($spawn->getFloorX(), $spawn->getFloorZ());
+						$player->teleport($spawn,0,0);
+                                                if(strpos($player->getNameTag(), "§cHunter>") !== false)
+                                                {
+                                                    $player->getArmorInventory()->setHelmet(Item::get(Item::LEATHER_CHESTPLATE));
+                                                    $player->getInventory()->setItem(2, Item::get(Item::COOKED_BEEF, 0, 5));
+						    $player->getInventory()->setItem(3, Item::get(Item::COMPASS, 0, 1));
+						    $player->addEffect(new EffectInstance(Effect::getEffect(Effect::NIGHT_VISION), (99999999*20), (3), (false)));
+                                                }
+                                                else
+                                                {
+                                                    $player->getInventory()->setItem(0, Item::get(Item::COOKED_BEEF, 0, 5));
+                                                    $player->addEffect(new EffectInstance(Effect::getEffect(Effect::NIGHT_VISION), (99999999*20), (3), (false)));
+                                                }
+                                                $player->addTitle("§eYou joined team §r".$team);
+                                                foreach($level->getPlayers() as $playersinarena)
+                                                {
+                                                $playersinarena->sendMessage($player->getNameTag() .TE::GOLD. " has joined the match.");
+                                                }
+                                                sinequipo:
+					}
+					else
+					{
+						$player->sendMessage($this->prefix . "You cannot enter");
+					}
+				}
+			}
+		}
+		elseif(in_array($player->getName(), $this->op)&&$this->mode==1)
+		{
+			$config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+			$config->set($this->currentLevel . "Spawn" . $this->mode, array($block->getX(),$block->getY()+1,$block->getZ()));
+			$player->sendMessage($this->prefix . "Spawn Corredores registrado!");
+			$this->mode++;
+			$config->save();
+		}
+		elseif(in_array($player->getName(), $this->op)&&$this->mode==2)
+		{
+			$config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+			$config->set($this->currentLevel . "Spawn" . $this->mode, array($block->getX(),$block->getY()+1,$block->getZ()));
+			$player->sendMessage($this->prefix . "Spawn Bestia Registrado!");
+			$config->set("arenas",$this->arenas);
+                        $config->set($this->currentLevel . "inicio", 0);
+			$player->sendMessage($this->prefix . "Toca un cartel para registrar Arena!");
+			$spawn = $this->getServer()->getDefaultLevel()->getSafeSpawn();
+			$this->getServer()->getDefaultLevel()->loadChunk($spawn->getFloorX(), $spawn->getFloorZ());
+			$player->teleport($spawn,0,0);
+			$config->save();
+			$this->mode=26;
+		}
+	}
+	
+	public function refreshArenas()
+	{
+		$config = new Config($this->getDataFolder() . "/config.yml", Config::YAML);
+		$config->set("arenas",$this->arenas);
+		foreach($this->arenas as $arena)
+		{
+			$config->set($arena . "PlayTime", 515);
+            $config->set($arena . "StartTime", 30);
+            $config->set($arena . "EndTime", 6);
+		}
+		$config->save();
+	}
+        
+        public function zipper($player, $name)
+        {
+        $path = realpath($player->getServer()->getDataPath() . 'worlds/' . $name);
+				$zip = new \ZipArchive;
+				@mkdir($this->getDataFolder() . 'arenas/', 0755);
+				$zip->open($this->getDataFolder() . 'arenas/' . $name . '.zip', $zip::CREATE | $zip::OVERWRITE);
+				$files = new \RecursiveIteratorIterator(
+					new \RecursiveDirectoryIterator($path),
+					\RecursiveIteratorIterator::LEAVES_ONLY
+				);
+                                foreach ($files as $datos) {
+					if (!$datos->isDir()) {
+						$relativePath = $name . '/' . substr($datos, strlen($path) + 1);
+						$zip->addFile($datos, $relativePath);
+					}
+				}
+				$zip->close();
+				$player->getServer()->loadLevel($name);
+				unset($zip, $path, $files);
+        }
+}
+
+class RefreshSigns extends Task {
+    public $prefix = TE::GRAY . "[" . TE::YELLOW. TE::BOLD . "Man" . TE::YELLOW . "Hunt" . TE::RESET . TE::GRAY . "]";
+	public function __construct($plugin)
+	{
+		$this->plugin = $plugin;
+		//parent::__construct($plugin);
+	}
+  
+	public function onRun(int $currentTick)
+	{
+		$allplayers = $this->plugin->getServer()->getOnlinePlayers();
+		$level = $this->plugin->getServer()->getDefaultLevel();
+		$tiles = $level->getTiles();
+		foreach($tiles as $t) {
+			if($t instanceof Sign) {	
+				$text = $t->getText();
+				if($text[3]==$this->prefix)
+				{
+					$aop = 0;
+                                        $namemap = str_replace("§f", "", $text[2]);
+					foreach($allplayers as $player){if($player->getLevel()->getFolderName()==$namemap){$aop=$aop+1;}}
+					$ingame = TE::AQUA . "[JOIN]";
+					$config = new Config($this->plugin->getDataFolder() . "/config.yml", Config::YAML);
+					if($config->get($namemap . "PlayTime")!=515)
+					{
+						$ingame = TE::DARK_PURPLE . "[INGAME]";
+					}
+					elseif($aop>=24)
+					{
+						$ingame = TE::GOLD . "[FULL]";
+					}
+                                        $t->setText($ingame,TE::GREEN  . $aop . " / 24",$text[2],$this->prefix);
+				}
+			}
+		}
+	}
+}
+
+class EntityUpdate extends Task {
+    public $plugin;
+
+	public function __construct($plugin) {
+		$this->plugin = $plugin;
+    }
+
+    public function onRun(int $currentTick) {
+        foreach ($this->plugin->getServer()->getDefaultLevel()->getEntities() as $entity) {
+            if ($entity instanceof EntityHuman) {
+                $entity->setNameTag($this->getName());
+            }
+        }
+    }
+
+    public function getName() : string {
+        $title = TE::BOLD . TE::YELLOW . 'Manhunt' . TE::WHITE . '§r<Version 1.2 develop>' . "\n";
+        $subtitle = TE::AQUA . $this->getPlaying() . ' playing';
+        return $title . $subtitle;
+    }
+
+    public function getPlaying() : int {
+        $players = [];
+        foreach ($this->plugin->arenas as $arena) {
+            if ($this->plugin->getServer()->getLevelByName($arena) !== null) {
+                foreach ($this->plugin->getServer()->getLevelByName($arena)->getPlayers() as $player) {
+                    array_push($players, $player->getName());
+                }
+            }
+        }
+        return count($players);
+    }
+}
+
+class GameSender extends Task {
+    public $prefix = "";
+    public $plugin;
+	public function __construct($plugin)
+	{
+		$this->plugin = $plugin;
+                $this->prefix = $this->plugin->prefix;
+		//parent::__construct($plugin);
+	}
+        
+        public function getResetmap() {
+        return new ResetMap($this);
+        }
+  
+	public function onRun(int $currentTick)
+	{
+		$config = new Config($this->plugin->getDataFolder() . "/config.yml", Config::YAML);
+		$arenas = $config->get("arenas");
+		if(!empty($arenas))
+		{
+			foreach($arenas as $arena)
+			{
+				$time = $config->get($arena . "PlayTime");
+                $timeToStart = $config->get($arena . "StartTime");
+                $timeToEnd = $config->get($arena . "EndTime");
+				$levelArena = $this->plugin->getServer()->getLevelByName($arena);
+				if($levelArena instanceof Level)
+				{
+					$playersArena = $this->plugin->getPlayers($arena);
+					if(count($playersArena)==0)
+					{
+						$config->set($arena . "PlayTime", 515);
+                        $config->set($arena . "StartTime", 30);
+                        $config->set($arena . "EndTime", 6);
+                                                $config->set($arena . "inicio", 0);
+					}
+					else
+					{
+                                                if(count($playersArena)>=2)
+                                                {
+                                                    $config->set($arena . "inicio", 1);
+                                                    $config->save();
+                                                }
+						if($config->get($arena . "inicio")==1)
+						{
+							if($timeToStart>0)
+							{
+								$timeToStart--;
+								foreach($levelArena->getPlayers() as $pl)
+								{
+                                                                        $pl->sendPopup(TE::GREEN. $timeToStart .TE::GREEN." secoonds to start ". TE::RESET);
+									if($timeToStart<=5)
+                                                                        {
+                                                                        $levelArena->addSound(new PopSound($pl));
+                                                                        }
+                                                                        if($timeToStart<=0)
+                                                                        {
+                                                                        $levelArena->addSound(new AnvilUseSound($pl));
+                                                                        }
+								}
+                                                                if($timeToStart==10)
+                                                                {
+                                                                      $pl->addTitle(TE::RED. "10" .TE::YELLOW."\nPrepare to Run! ". TE::RESET);
+                                                                }
+							        if($timeToStart==5)
+                                                                {
+                                                                      $pl->addTitle(TE::RED. "5" .TE::YELLOW."\nPrepare to Run! ". TE::RESET);
+                                                                }
+							        if($timeToStart==4)
+                                                                {
+                                                                      $pl->addTitle(TE::RED. "4" .TE::YELLOW."\nPrepare to Run! ". TE::RESET);
+								}
+                                                                if($timeToStart==3)
+                                                                {
+                                                                      $pl->addTitle(TE::RED. "3" .TE::YELLOW."\nPrepare to Run! ". TE::RESET);
+                                                                }
+                                                                if($timeToStart==2)
+                                                                {
+                                                                      $pl->addTitle(TE::RED. "2" .TE::YELLOW."\nPrepare to Run! ". TE::RESET);
+                                                                }
+							        if($timeToStart==1)
+                                                                {
+                                                                      $pl->addTitle(TE::RED. "1" .TE::YELLOW."\nPrepare to Run! ". TE::RESET);
+                                                                }
+								if($timeToStart<=0)
+								{
+                                                                    $tiles = $levelArena->getTiles();
+                                                                    foreach ($tiles as $tile) {
+                                                                        if ($tile instanceof Sign) {
+                                                                            $text = $tile->getText();
+                                                                            if (strtolower($text[0]) == "runner") {
+                                                                                $levelArena->setBlock($tile->add(0, 2, 0), new Air());
+                                                                                $levelArena->setBlock($tile->add(0, 3, 0), new Air());
+                                                                            }
+                                                                        }
+                                                                    }
+								}
+								$config->set($arena . "StartTime", $timeToStart);
+							}
+							else
+							{
+                                                                $colors = array();
+                                                                foreach($levelArena->getPlayers() as $pl)
+                                                                {
+                                                                array_push($colors, $pl->getNameTag());
+                                                                }
+                                                                $names = implode("-", $colors);
+                                                                $bestia = substr_count($names, "§aRunner>");
+                                                                $corredor = substr_count($names, "§cHunter>");
+                                                                foreach($levelArena->getPlayers() as $pla)
+                                                                {
+                                                                    if(strpos($pla->getNameTag(), "§aRunner>") !== false)
+                                                                    {
+                                                                        $x = $pla->x;
+                                                                        $z = $pla->z;
+                                                                    }
+                                                                }
+                                                                foreach($levelArena->getPlayers() as $pla)
+                                                                {
+                                                                    $x1 = $pla->x;
+                                                                    $z1 = $pla->z;
+                                                                    if(strpos($pla->getNameTag(), "§cHunter>") !== false)
+                                                                    {
+                                                                        $x3 = pow($x1 - $x1, 2);
+                                                                        $z3 = pow($z1 - $z1, 2);
+                                                                        $lol = $x3 + $z3;
+                                                                        $dist = intval(sqrt($lol));
+                                                                        $api = $this->plugin->score;
+                                                                        $api->new($pla, $pla->getName(), TE::BOLD.TE::YELLOW."MANHUNT");
+                                                                        $i = 0;
+                                                                        $lines = [
+                                                                        TE::WHITE."   ",
+                                                                        TE::WHITE."Runners Left: ".TE::GREEN.$bestia,
+                                                                        TE::WHITE."Hunters Left: ".TE::GREEN.$corredor,
+                                                                        TE::WHITE."   ",
+                                                                        TE::WHITE."Distance: ".TE::GREEN.$dist,
+									TE::WHITE."   ",
+									TE::WHITE."If you see any bugs please",
+                                                                        TE::WHITE."Contact us here using /report.",
+									TE::WHITE."   ",
+									TE::WHITE."Mode: ".TE::GREEN."Classic",
+                                                                        TE::WHITE."Time left: ".TE::GREEN.$time,
+                                                                        TE::WHITE."   ",
+                                                                        TE::YELLOW."playwcserver.ddns.net ",
+                                                                        ];
+                                                                        foreach($lines as $line){
+                                                                        	if($i < 15){
+                                                                        	$i++;
+                                                                   	     $api->setLine($pla, $i, $line);
+                                                                        	}
+                                                                        }
+                                                                      //  $pla->sendTip(TE::RED."Bestia:" . $bestia .TE::AQUA. " Runner:" . $corredor.TE::YELLOW." Dist.Bestia:".TE::LIGHT_PURPLE.$dist.TE::YELLOW." Tiempo: ".TE::GREEN.$time. TE::RESET);
+                                                                    }
+                                                                    else
+                                                                    {
+                                                                    	$api = $this->plugin->score;
+                                                                        $api->new($pla, $pla->getName(), TE::BOLD.TE::YELLOW."MANHUNT");
+                                                                        $i = 0;
+                                                                        $lines = [
+                                                                        TE::WHITE."   ",
+                                                                        TE::WHITE."Runners Left: ".TE::GREEN.$bestia,
+                                                                        TE::WHITE."Beasts Left ".TE::GREEN.$corredor,
+                                                                        TE::WHITE."    ",
+									TE::WHITE."You are the ".TE::GREEN."Runner",
+									TE::WHITE."   ",
+									TE::WHITE."If you see any bugs please",
+                                                                        TE::WHITE."Contact us here using /report.",
+									TE::WHITE."   ",
+									TE::WHITE."Mode: ".TE::GREEN."Solo",
+                                                                        TE::WHITE."Time: ".TE::GREEN.$time,
+                                                                        TE::WHITE."   ",
+                                                                        TE::YELLOW."playwcserver.ddns.net ",
+                                                                        ];
+                                                                        foreach($lines as $line){
+                                                                        	if($i < 15){
+                                                                        	$i++;
+                                                                   	     $api->setLine($pla, $i, $line);
+                                                                        	}
+                                                                        }
+                                                                          //  $pla->sendTip(TE::RED."Bestia:" . $bestia .TE::AQUA. " Runners:" . $corredor.TE::YELLOW." Tiempo: ".TE::GREEN.$time. TE::RESET);
+                                                                    }
+                                                                }
+                                                                $winner = null;
+                                                                $winners = array();
+                                                                if($bestia!=0 && $corredor==0)
+                                                                {
+                                                                    $winner = TE::YELLOW."WC>".TE::GOLD." CONGRATS! To the Runners!  ".TE::GOLD."For winning against the Hunters!";
+                                                                    foreach($levelArena->getPlayers() as $pl)
+                                                                    {
+                                                                        if(strpos($pl->getNameTag(), "§aRunner>") !== false)
+                                                                        {
+                                                                            array_push($winners, $pl->getNameTag());
+                                                                        }
+                                                                    }
+                                                                }
+                                                                if($bestia==0 && $corredor!=0)
+                                                                {
+                                                                    $winner = TE::YELLOW."WC>".TE::GOLD." CONGRATS! To the Hunters!  ".TE::GOLD."For winning against the Runners";
+                                                                    foreach($levelArena->getPlayers() as $pl)
+                                                                    {
+                                                                        if(strpos($pl->getNameTag(), "§cHunter>") !== false)
+                                                                        {
+                                                                            array_push($winners, $pl->getNameTag());
+                                                                        }
+                                                                    }
+                                                                }
+                                                                if($winner!=null)
+                                                                {
+                                                                    $timeToEnd--;
+                                                                    $config->set($arena . "EndTime", $timeToEnd);
+                                                                    $config->save();
+                                                                    $namewin = implode(", ", $winners);
+                                                                    foreach($levelArena->getPlayers() as $pl)
+                                                                    {
+                                                                        if ($timeToEnd == 5) {
+                                                                            $pl->sendTip(TE::WHITE . 'Restarting in ' . TE::GREEN . '5');
+                                                                        } else if ($timeToEnd == 4) {
+                                                                            $pl->sendTip(TE::WHITE . 'Restarting in' . TE::GREEN . ' 4');
+                                                                        } else if ($timeToEnd == 3) {
+                                                                            $pl->sendTip(TE::WHITE . 'Restarting in ' . TE::GREEN . ' 3');
+                                                                        } else if ($timeToEnd == 2) {
+                                                                            $pl->sendTip(TE::WHITE . 'Restarting in ' . TE::GREEN . ' 2');
+                                                                        } else if ($timeToEnd == 1) {
+                                                                            $pl->sendTip(TE::WHITE . 'Restarting in ' . TE::GREEN . ' 1');
+                                                                        } else if ($pl->getGamemode() == 2 || $pl->getGamemode() == 0) {
+                                                                            $pl->addTitle(TE::GOLD . TE::BOLD . '¡VICTORY!');
+                                                                        } else if ($timeToEnd == 0) {
+                                                                            $pl->setGamemode(0);
+                                                                            $pl->getInventory()->clearAll();
+                                                                            $pl->getArmorInventory()->clearAll();
+                                                                            $pl->removeAllEffects();
+                                                                            $pl->teleport($this->plugin->getServer()->getDefaultLevel()->getSafeSpawn());
+                                                                            $pl->setNameTag($pl->getName());
+                                                                            $config->set($arena . "PlayTime", 515);
+                                                                            $config->set($arena . "StartTime", 30);
+                                                                            $config->set($arena . "EndTime", 6);
+                                                                            $config->set($arena . "inicio", 0);
+                                                                            $config->save();
+                                                                            $api = $this->plugin->score;
+                                                                            $api->remove($pl);
+                                                                            $this->getResetmap()->reload($arena);
+                                                                        }
+                                                                    }
+                                                                }
+								$time--;
+								if($time == 514)
+								{
+                                                                        $slots = new Config($this->plugin->getDataFolder() . "/slots.yml", Config::YAML);
+                                                                        for ($i = 1; $i <= 24; $i++) {
+                                                                        $slots->set("slot".$i.$arena, 0);
+                                                                        }
+                                                                        $slots->save();
+									foreach($levelArena->getPlayers() as $pl)
+									{
+                                                                            $pl->sendMessage(TE::GREEN."§a=======================================================");
+								            $pl->sendMessage(TE::WHITE."                       Manhunt!");
+                                                                            $pl->sendMessage(TE::YELLOW.">"."You have 15 seconds to run before the Hunters kill you.");
+                                                                            $pl->sendMessage(TE::YELLOW.">"."Survive in survival! And fight back to survive.");
+                                                                            $pl->sendMessage(TE::GREEN."§a=======================================================");
+									    $pl->setGamemode(0);
+									}
+								}
+                                                                if($time == 500)
+								{
+                                                                    foreach($levelArena->getPlayers() as $pl)
+                                                                    {
+                                                                        $levelArena->addSound(new GhastShootSound($pl));
+									$pl->addTitle(TE::GREEN.">> ".TE::RED."It is HUNT TIME!!".TE::GREEN."<< ".TE::RESET);
+                                                                    }
+                                                                    $tiles = $levelArena->getTiles();
+                                                                    foreach ($tiles as $tile) {
+                                                                        if ($tile instanceof Sign) {
+                                                                            $text = $tile->getText();
+                                                                            if (strtolower($text[0]) == "beast") {
+                                                                                $levelArena->setBlock($tile->add(0, 2, 0), new Air());
+                                                                                $levelArena->setBlock($tile->add(0, 3, 0), new Air());
+                                                                            }
+                                                                        }
+                                                                    }
+								}
+                                                                if($time <= 0)
+                                                                {
+                                                                    foreach($levelArena->getPlayers() as $pl)
+                                                                    {
+                                                                        $pl->setGamemode(0);
+                                                                            $pl->getInventory()->clearAll();
+                                                                  		    $pl->getArmorInventory()->clearAll();
+                                                                            $pl->removeAllEffects();
+                                                                            $pl->setFood(20);
+                                                                            $pl->setHealth(20);
+                                                                            $pl->setNameTag($pl->getName());
+                                                                            $config->set($arena . "starting", 0);
+                                                                            $config->save();
+                                                                            $api = $this->plugin->score;
+                                                                    	    $api->remove($pl);
+                                                                    }
+                                                                    $winner = TE::YELLOW."WC>".TE::GOLD." CONGRATS! To the Runners!  ".TE::GOLD."For wining in".TE::GOLD." arena ";
+                                                                    $time = 515;
+                                                                    $this->getResetmap()->reload($arena);
+                                                                }
+								$config->set($arena . "PlayTime", $time);
+							}
+						}
+						else
+						{
+                                                    foreach($levelArena->getPlayers() as $pl)
+                                                    {
+                                                        $pl->sendTip(TE::LIGHT_PURPLE . "Missing one more player" .TE::RESET);
+                                                    }
+                                                    $config->set($arena . "PlayTime", 515);
+                                                    $config->set($arena . "StartTime", 30);
+                                                    $config->set($arena . "EndTime", 6);
+						}
+					}
+				}
+			}
+		}
+		$config->save();
+	}
+}
